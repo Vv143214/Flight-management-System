@@ -1,0 +1,58 @@
+include:
+  - project: "dep/library/ci-library"
+    ref: "production"
+    file: "main.rules.yml"
+
+variables:
+  PROJ_FILE_PATH: "pom.xml"
+  
+# stages:
+#   - build-application
+
+
+
+build-application:
+  stage: build-application
+  image: maven:3.8.4-openjdk-8-slim
+  script:
+    - mvn -f FMS/pom.xml clean package
+  artifacts:
+    #name: "$CI_JOB_NAME"
+    paths:
+      - FMS/target/*.jar
+
+
+
+build-image:
+  extends: .java-job-with-web-requests
+  stage: build-image
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  script:
+     - CopyCertsToDirectory "/kaniko/ssl/certs"
+     - mkdir -p /kaniko/.docker
+     - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf "%s:%s" "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
+     - >-
+      /kaniko/executor
+      --context "${CI_PROJECT_DIR}"
+      --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
+      --destination "${CI_REGISTRY_IMAGE}:dev"
+
+auto-deploy:
+  extends: .java-job-with-web-requests
+  stage: deploy
+  image: widerin/openshift-cli:v4.2
+  before_script:
+    - oc login --server="$OPENSHIFT_URL" --token="$OPENSHIFT_TOKEN"
+    - oc project "$OPENSHIFT_PROJECT"
+    - oc version
+  script:
+    - oc new-app --strategy=docker --binary --name ${CI_PROJECT_NAME} || true
+    - oc start-build ${CI_PROJECT_NAME} --from-dir .
+    - oc expose dc/${CI_PROJECT_NAME} --port 8080 && oc expose svc/${CI_PROJECT_NAME} || true
+  after_script:
+    - oc logout
+
+
+
